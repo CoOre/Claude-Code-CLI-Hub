@@ -1,0 +1,28 @@
+[project]
+name = "claude-code-cli-hub"
+version = "1.0.0"
+description = "Model switcher tray app for Claude Code CLI"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "pystray==0.19.5",
+    "Pillow==12.1.0",
+]
+
+[project.optional-dependencies]
+build = [
+    "pyinstaller>=6.0.0",
+]
+
+[project.scripts]
+claude-code-cli-hub = "main:main"
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main"]
+
+[tool.setuptools.package-data]
+"*" = ["data/*"]

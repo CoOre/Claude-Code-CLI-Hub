@@ -1,0 +1,110 @@
+name: Build Release Binaries
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            os_name: linux
+            binary_name: claude-code-cli-hub
+            asset_name: claude-code-cli-hub-linux-x86_64
+          - os: macos-latest
+            os_name: macos
+            binary_name: claude-code-cli-hub
+            asset_name: claude-code-cli-hub-macos-x86_64
+          - os: windows-latest
+            os_name: windows
+            binary_name: claude-code-cli-hub.exe
+            asset_name: claude-code-cli-hub-windows-x86_64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[build]"
+
+    - name: Build with PyInstaller (Linux/MacOS)
+      if: matrix.os_name != 'windows'
+      run: |
+        pyinstaller --onefile --windowed \
+          --name=${{ matrix.binary_name }} \
+          --add-data="data:data" \
+          --hidden-import=pystray \
+          --hidden-import=PIL \
+          main.py
+
+    - name: Build with PyInstaller (Windows)
+      if: matrix.os_name == 'windows'
+      run: |
+        pyinstaller --onefile --windowed `
+          --name=${{ matrix.binary_name }} `
+          --add-data="data;data" `
+          --hidden-import=pystray `
+          --hidden-import=PIL `
+          main.py
+
+    - name: Create archive (Linux/MacOS)
+      if: matrix.os_name != 'windows'
+      run: |
+        cd dist
+        tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.binary_name }}
+        cd ..
+
+    - name: Create archive (Windows)
+      if: matrix.os_name == 'windows'
+      run: |
+        cd dist
+        Compress-Archive -Path ${{ matrix.binary_name }} -DestinationPath ${{ matrix.asset_name }}.zip
+        cd ..
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.asset_name }}
+        path: dist/${{ matrix.asset_name }}.*
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display structure of downloaded files
+      run: ls -R artifacts
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: artifacts/**/*.tar.gz,artifacts/**/*.zip
+        draft: false
+        prerelease: false
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

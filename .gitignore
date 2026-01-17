@@ -1,0 +1,49 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Security / secrets
+.env
+.env.*
+*.key
+*.pem
+*.crt
+*.p12
+*.pfx
+*secrets*.yaml
+*secrets*.yml
+*secrets*.json
+*.keystore
+*.jks
+
+# Local settings
+*.local.json
+*.local.yaml
+*.local.yml
+settings.local.py
+.python-version
+.tool-versions
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# Data files
+data/models.json
+
+# Tests and coverage
+.pytest_cache/
+.coverage
+.coverage.*
+
+# Editors and OS files
+.DS_Store
+.idea/
+.vscode/
