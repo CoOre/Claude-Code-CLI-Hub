@@ -70,10 +70,19 @@ jobs:
         python -m pip install --upgrade pip
         pip install -e ".[build]"
 
-    - name: Build with PyInstaller (Linux/MacOS)
-      if: matrix.os_name != 'windows'
+    - name: Build with PyInstaller (Linux)
+      if: matrix.os_name == 'linux'
       run: |
         pyinstaller --onefile --windowed \
+          --name=${{ matrix.binary_name }} \
+          --hidden-import=pystray \
+          --hidden-import=PIL \
+          main.py
+
+    - name: Build with PyInstaller (macOS)
+      if: matrix.os_name == 'macos'
+      run: |
+        pyinstaller --onefile \
           --name=${{ matrix.binary_name }} \
           --hidden-import=pystray \
           --hidden-import=PIL \
@@ -88,8 +97,15 @@ jobs:
           --hidden-import=PIL `
           main.py
 
-    - name: Create archive (Linux/MacOS)
-      if: matrix.os_name != 'windows'
+    - name: Create archive (Linux)
+      if: matrix.os_name == 'linux'
+      run: |
+        cd dist
+        tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.binary_name }}
+        cd ..
+
+    - name: Create archive (macOS)
+      if: matrix.os_name == 'macos'
       run: |
         cd dist
         tar -czf ${{ matrix.asset_name }}.tar.gz ${{ matrix.binary_name }}
