@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 from pathlib import Path
 from tkinter import messagebox
@@ -273,12 +274,14 @@ class ModelDialog:
         self._context_menu.add_command(label="Вставить", command=self._ctx_paste)
 
         for entry in self._entries:
-            # cover right click on Windows/Linux and secondary click on macOS
-            entry.bind("<Button-3>", self._show_context_menu, add="+")
-            entry.bind("<Button-2>", self._show_context_menu, add="+")
-            entry.bind("<ButtonRelease-3>", self._show_context_menu, add="+")
-            entry.bind("<ButtonRelease-2>", self._show_context_menu, add="+")
-            entry.bind("<Control-Button-1>", self._show_context_menu, add="+")  # macOS ctrl+click fallback
+            if sys.platform == 'darwin':
+                # macOS: Use button-2 for secondary click (control-click)
+                entry.bind("<Button-2>", self._show_context_menu)
+                entry.bind("<Control-Button-1>", self._show_context_menu)
+            else:
+                # Windows/Linux: Use button-3 for right click
+                entry.bind("<Button-3>", self._show_context_menu)
+                entry.bind("<ButtonRelease-3>", self._show_context_menu)
 
             # force paste to run once, overriding platform defaults that may double-trigger
             for seq in ("<Command-v>", "<Control-v>", "<Command-V>", "<Control-V>"):
@@ -304,13 +307,25 @@ class ModelDialog:
         event.widget.focus_set()
         try:
             self._context_menu.tk_popup(event.x_root, event.y_root)
+        except Exception as e:
+            # On macOS, tk_popup can fail if menu is still being updated
+            # Just return "break" to stop further event processing
+            pass
         finally:
-            self._context_menu.grab_release()
+            try:
+                self._context_menu.grab_release()
+            except Exception:
+                # Ignore grab_release errors on macOS
+                pass
         return "break"
 
     def _on_paste_key(self, event):
         if event.widget in self._entries:
-            event.widget.event_generate("<<Paste>>")
+            try:
+                event.widget.event_generate("<<Paste>>")
+            except Exception:
+                # Ignore paste errors on macOS
+                pass
             return "break"  # stop default class binding to avoid double paste
         return None
 

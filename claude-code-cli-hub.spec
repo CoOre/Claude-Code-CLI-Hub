@@ -6,7 +6,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('data', 'data')],
+    datas=[],
     hiddenimports=['pystray', 'PIL', 'PIL._imagingtk'],
     hookspath=[],
     hooksconfig={},
