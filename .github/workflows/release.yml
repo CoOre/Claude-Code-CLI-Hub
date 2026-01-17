@@ -17,26 +17,80 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     outputs:
-      version: ${{ steps.version.outputs.version }}
+      version: ${{ steps.bump.outputs.version }}
+      bumped: ${{ steps.bump.outputs.bumped }}
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Generate version
-      id: version
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install bump-my-version
       run: |
-        VERSION="v1.0.0-$(date +'%Y%m%d-%H%M%S')"
-        echo "version=$VERSION" >> $GITHUB_OUTPUT
-        echo "Generated version: $VERSION"
+        python -m pip install --upgrade pip
+        pip install bump-my-version
 
-    - name: Create and push tag
+    - name: Configure git
       run: |
         git config user.name "github-actions[bot]"
         git config user.email "github-actions[bot]@users.noreply.github.com"
-        git tag -a ${{ steps.version.outputs.version }} -m "Release ${{ steps.version.outputs.version }}"
-        git push origin ${{ steps.version.outputs.version }}
+
+    - name: Get latest commit message
+      id: commit
+      run: |
+        LATEST_MSG=$(git log -1 --pretty=%B)
+        echo "message<<EOF" >> $GITHUB_OUTPUT
+        echo "$LATEST_MSG" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
+        echo "Latest commit: $LATEST_MSG"
+
+    - name: Bump version
+      id: bump
+      run: |
+        COMMIT_MSG="${{ steps.commit.outputs.message }}"
+
+        # Check for BREAKING CHANGE (major bump)
+        if echo "$COMMIT_MSG" | grep -qE "BREAKING CHANGE|BREAKING-CHANGE"; then
+          echo "Detected BREAKING CHANGE - bumping major"
+          bump-my-version bump major --tag-commit
+          VERSION=$(bump-my-version show --format "{new_version}")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          echo "bumped=true" >> $GITHUB_OUTPUT
+        # Check for feat: (minor bump)
+        elif echo "$COMMIT_MSG" | grep -qE "^feat:"; then
+          echo "Detected feat: - bumping minor"
+          bump-my-version bump minor --tag-commit
+          VERSION=$(bump-my-version show --format "{new_version}")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          echo "bumped=true" >> $GITHUB_OUTPUT
+        # Check for fix: or other conventional commits (patch bump)
+        elif echo "$COMMIT_MSG" | grep -qE "^fix:|^refactor:|^perf:|^chore:|^docs:|^test:|^ci:|^build:"; then
+          echo "Detected conventional commit - bumping patch"
+          bump-my-version bump patch --tag-commit
+          VERSION=$(bump-my-version show --format "{new_version}")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          echo "bumped=true" >> $GITHUB_OUTPUT
+        else
+          echo "No conventional commit detected - using patch bump"
+          bump-my-version bump patch --tag-commit
+          VERSION=$(bump-my-version show --format "{new_version}")
+          echo "version=v$VERSION" >> $GITHUB_OUTPUT
+          echo "bumped=true" >> $GITHUB_OUTPUT
+        fi
+
+        echo "Bumped to version: $VERSION"
+
+    - name: Push tag and changes
+      if: steps.bump.outputs.bumped == 'true'
+      run: |
+        git push origin main --follow-tags
+        echo "Pushed version ${{ steps.bump.outputs.version }}"
 
   build:
     runs-on: ${{ matrix.os }}
@@ -142,6 +196,7 @@ jobs:
       run: ls -R artifacts
 
     - name: Wait for tag to be created
+      if: needs.bump-version.outputs.bumped == 'true'
       run: |
         echo "Waiting for tag ${{ needs.bump-version.outputs.version }} to be available..."
         sleep 10

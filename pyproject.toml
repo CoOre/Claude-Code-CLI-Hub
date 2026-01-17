@@ -13,6 +13,9 @@ dependencies = [
 build = [
     "pyinstaller>=6.0.0",
 ]
+dev = [
+    "bump-my-version>=0.21.0",
+]
 
 [project.scripts]
 claude-code-cli-hub = "main:main"

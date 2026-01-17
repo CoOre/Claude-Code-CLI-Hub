@@ -1,0 +1,33 @@
+[tool.bumpversion]
+current_version = "1.0.0"
+parse = "(?P<major>\\d+)\\.(?P<minor>\\d+)\\.(?P<patch>\\d+)"
+serialize = ["{major}.{minor}.{patch}"]
+search = "{current_version}"
+replace = "{new_version}"
+commit = true
+message = "bump: version {current_version} → {new_version}"
+tag = true
+tag_name = "v{new_version}"
+tag_message = "Release {new_version}"
+
+[tool.bumpversion.parts.major]
+first_value = 1
+independent = false
+
+[tool.bumpversion.parts.minor]
+first_value = 0
+independent = false
+
+[tool.bumpversion.parts.patch]
+first_value = 0
+independent = false
+
+[[tool.bumpversion.files]]
+filename = "pyproject.toml"
+search = 'version = "{current_version}"'
+replace = 'version = "{new_version}"'
+
+[[tool.bumpversion.files]]
+filename = "__version__.py"
+search = '__version__ = "{current_version}"'
+replace = '__version__ = "{new_version}"'
