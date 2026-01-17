@@ -382,10 +382,21 @@ class App:
         items = []
         for model in self.manager.list_models():
             name = model["name"]
+            # Create a closure that captures the name
+            def make_callback(model_name):
+                def callback(icon, item):
+                    self._set_active_from_tray(model_name)
+                return callback
+
+            def make_checked(model_name):
+                def checked_func(item):
+                    return self.manager.is_active(model_name)
+                return checked_func
+
             items.append(pystray.MenuItem(
                 name,
-                lambda _, m=name: self._set_active_from_tray(m),
-                checked=lambda item, m=name: self.manager.is_active(m)
+                make_callback(name),
+                checked=make_checked(name)
             ))
         items.append(pystray.Menu.SEPARATOR)
         items.append(pystray.MenuItem("Открыть окно", lambda _: self._bring_to_front()))

@@ -1,6 +1,6 @@
 [project]
 name = "claude-code-cli-hub"
-version = "1.0.0"
+version = "1.0.1"
 description = "Model switcher tray app for Claude Code CLI"
 readme = "README.md"
 requires-python = ">=3.11"
