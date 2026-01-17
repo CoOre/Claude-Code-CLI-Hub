@@ -55,36 +55,29 @@ jobs:
       run: |
         COMMIT_MSG="${{ steps.commit.outputs.message }}"
 
-        # Check for BREAKING CHANGE (major bump)
+        # Determine version part to bump
         if echo "$COMMIT_MSG" | grep -qE "BREAKING CHANGE|BREAKING-CHANGE"; then
           echo "Detected BREAKING CHANGE - bumping major"
-          bump-my-version bump major --tag-commit
-          VERSION=$(bump-my-version show --format "{new_version}")
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-          echo "bumped=true" >> $GITHUB_OUTPUT
-        # Check for feat: (minor bump)
+          VERSION_PART="major"
         elif echo "$COMMIT_MSG" | grep -qE "^feat:"; then
           echo "Detected feat: - bumping minor"
-          bump-my-version bump minor --tag-commit
-          VERSION=$(bump-my-version show --format "{new_version}")
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-          echo "bumped=true" >> $GITHUB_OUTPUT
-        # Check for fix: or other conventional commits (patch bump)
+          VERSION_PART="minor"
         elif echo "$COMMIT_MSG" | grep -qE "^fix:|^refactor:|^perf:|^chore:|^docs:|^test:|^ci:|^build:"; then
           echo "Detected conventional commit - bumping patch"
-          bump-my-version bump patch --tag-commit
-          VERSION=$(bump-my-version show --format "{new_version}")
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-          echo "bumped=true" >> $GITHUB_OUTPUT
+          VERSION_PART="patch"
         else
           echo "No conventional commit detected - using patch bump"
-          bump-my-version bump patch --tag-commit
-          VERSION=$(bump-my-version show --format "{new_version}")
-          echo "version=v$VERSION" >> $GITHUB_OUTPUT
-          echo "bumped=true" >> $GITHUB_OUTPUT
+          VERSION_PART="patch"
         fi
 
-        echo "Bumped to version: $VERSION"
+        # Get the next version without actually bumping
+        NEXT_VERSION=$(bump-my-version show -i $VERSION_PART --format json | jq -r '.new_version')
+        echo "version=v$NEXT_VERSION" >> $GITHUB_OUTPUT
+        echo "bumped=true" >> $GITHUB_OUTPUT
+        echo "Bumping $VERSION_PART: current -> $NEXT_VERSION"
+
+        # Actually bump the version
+        bump-my-version bump $VERSION_PART --allow-dirty
 
     - name: Push tag and changes
       if: steps.bump.outputs.bumped == 'true'
