@@ -9,10 +9,6 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 
-from PIL import Image, ImageDraw
-import pystray
-
-
 DATA_PATH = Path.home() / ".config" / "ccc_hub" / "models.json"
 CLAUDE_SETTINGS_PATH = Path.home() / ".claude" / "settings.json"
 DEFAULT_ENV = {
@@ -39,6 +35,21 @@ DEFAULT_MODELS = [
         **{**DEFAULT_ENV, "ANTHROPIC_BASE_URL": "http://localhost:11434/v1"},
     },
 ]
+
+
+def _resource_root() -> Path:
+    if hasattr(sys, "_MEIPASS"):
+        return Path(getattr(sys, "_MEIPASS"))
+    return Path(__file__).resolve().parent
+
+
+def _resolve_icon_path() -> Path | None:
+    assets_dir = _resource_root() / "assets"
+    for icon_name in ("ico.png", "icon.png", "icon.ico"):
+        candidate = assets_dir / icon_name
+        if candidate.exists():
+            return candidate
+    return None
 
 
 class ModelManager:
@@ -457,9 +468,14 @@ class App:
         self.root = root
         self.manager = manager
         self.tray_icon = None
+        self._tk_icon = None
+        self._pystray = None
+        self._pillow_image = None
+        self._pillow_draw = None
         self._quit_requested = False
         self._setup_ui()
-        self._start_tray()
+        # Delay tray startup to let Tk render the window first.
+        self.root.after(0, self._start_tray)
         self._start_quit_checker()
 
     def _setup_ui(self):
@@ -467,6 +483,7 @@ class App:
         self.root.geometry("760x460")
         self.root.minsize(620, 360)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._set_window_icon()
 
         style = ttk.Style()
         style.configure("TButton", padding=6)
@@ -526,13 +543,48 @@ class App:
         return dialog.result
 
     def _start_tray(self):
+        try:
+            import pystray
+            from PIL import Image, ImageDraw
+        except Exception:
+            # Keep the app usable even if tray dependencies fail.
+            return
+
+        self._pystray = pystray
+        self._pillow_image = Image
+        self._pillow_draw = ImageDraw
+
         icon_image = self._generate_icon()
         menu = self._build_menu()
         self.tray_icon = pystray.Icon("model_switcher", icon_image, "Переключатель моделей", menu)
         thread = threading.Thread(target=self.tray_icon.run, daemon=True)
         thread.start()
 
+    def _set_window_icon(self):
+        icon_path = _resolve_icon_path()
+        if not icon_path:
+            return
+        try:
+            self._tk_icon = tk.PhotoImage(file=str(icon_path))
+            self.root.iconphoto(True, self._tk_icon)
+        except Exception:
+            # Keep app functional if Tk fails to load the png.
+            pass
+
     def _generate_icon(self):
+        Image = self._pillow_image
+        ImageDraw = self._pillow_draw
+        if Image is None or ImageDraw is None:
+            return None
+
+        icon_path = _resolve_icon_path()
+        if icon_path:
+            try:
+                image = Image.open(icon_path).convert("RGBA")
+                return image.resize((64, 64), Image.Resampling.LANCZOS)
+            except Exception:
+                pass
+
         size = 64
         image = Image.new("RGBA", (size, size), (30, 30, 36, 255))
         draw = ImageDraw.Draw(image)
@@ -541,6 +593,10 @@ class App:
         return image
 
     def _build_menu(self):
+        if self._pystray is None:
+            return None
+        pystray = self._pystray
+
         items = []
         for model in self.manager.list_models():
             name = model["name"]

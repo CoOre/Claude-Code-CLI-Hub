@@ -7,19 +7,18 @@ block_cipher = None
 # Загружаем версию
 version = "1.0.3"  # Обновляется автоматически bump-my-version
 
-# Определяем путь к иконке в зависимости от платформы
-# Для macOS используем PNG — PyInstaller сконвертирует при необходимости
+# Определяем путь к иконке в зависимости от платформы.
+# Приоритет у пользовательской иконки assets/ico.png.
 if sys.platform == 'darwin':
-    icon_path = 'assets/icon.png'
+    icon_candidates = ['assets/icon.icns', 'assets/icon.png', 'assets/ico.png']
 elif sys.platform == 'win32':
-    icon_path = 'assets/icon.ico'
+    icon_candidates = ['assets/icon.ico', 'assets/ico.png', 'assets/icon.png']
 else:
-    icon_path = 'assets/icon.png'
+    icon_candidates = ['assets/icon.png', 'assets/ico.png']
 
-# Проверяем существование файла иконки
-if not os.path.exists(icon_path):
-    print(f"Warning: Icon not found at {icon_path}")
-    icon_path = None
+icon_path = next((path for path in icon_candidates if os.path.exists(path)), None)
+if not icon_path:
+    print(f"Warning: Icon not found. Checked: {icon_candidates}")
 
 # Для macOS используем onedir mode (noarchive=True) для корректной работы .app bundle
 # Для других платформ используем onefile mode (noarchive=False)
@@ -29,7 +28,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets', 'assets')],
     hiddenimports=['pystray', 'PIL', 'PIL._imagingtk', 'PIL.Image', 'PIL.ImageDraw'],
     hookspath=[],
     hooksconfig={},

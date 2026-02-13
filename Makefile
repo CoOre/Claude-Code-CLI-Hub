@@ -1,4 +1,4 @@
-.PHONY: build install clean macos linux windows help
+.PHONY: build install clean macos linux windows help icons
 
 # Автоопределение ОС
 UNAME_S := $(shell uname -s)
@@ -25,6 +25,7 @@ help:
 	@echo "  make windows  - собрать для Windows"
 	@echo "  make clean    - удалить папки build и dist"
 	@echo "  make run      - запустить собранное приложение"
+	@echo "  make icons    - сконвертировать assets/ico.png в icon.*"
 
 install:
 	pip install -e ".[build]"
@@ -32,7 +33,10 @@ install:
 build: $(BINARY)
 	@echo "Сборка завершена: $(BINARY)"
 
-macos:
+icons: assets/ico.png generate_icons.py
+	python3 generate_icons.py
+
+macos: icons
 	@echo "Сборка для macOS..."
 	pyinstaller claude-code-cli-hub.spec
 	@echo "Создание DMG..."
@@ -42,21 +46,21 @@ macos:
 		claude-code-cli-hub-macos-x86_64.dmg || true
 	@echo "Готово: dist/claude-code-cli-hub-macos-x86_64.dmg"
 
-linux:
+linux: icons
 	@echo "Сборка для Linux..."
 	pyinstaller claude-code-cli-hub.spec
 	@echo "Создание архива..."
 	cd dist && tar -czf claude-code-cli-hub-linux-x86_64.tar.gz claude-code-cli-hub
 	@echo "Готово: dist/claude-code-cli-hub-linux-x86_64.tar.gz"
 
-windows:
+windows: icons
 	@echo "Сборка для Windows..."
 	pyinstaller claude-code-cli-hub.spec
 	@echo "Создание архива..."
 	cd dist && powershell Compress-Archive -Path claude-code-cli-hub.exe -DestinationPath claude-code-cli-hub-windows-x86_64.zip -Force
 	@echo "Готово: dist/claude-code-cli-hub-windows-x86_64.zip"
 
-dist/claude-code-cli-hub.app dist/claude-code-cli-hub dist/claude-code-cli-hub.exe: main.py claude-code-cli-hub.spec
+dist/claude-code-cli-hub.app dist/claude-code-cli-hub dist/claude-code-cli-hub.exe: main.py claude-code-cli-hub.spec icons
 	pyinstaller claude-code-cli-hub.spec
 
 run:
