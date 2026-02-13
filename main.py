@@ -5,6 +5,9 @@ from pathlib import Path
 from tkinter import messagebox
 from tkinter import ttk
 import tkinter as tk
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 
 from PIL import Image, ImageDraw
 import pystray
@@ -87,6 +90,17 @@ class ModelManager:
                 self.active = model["name"]
             self._save()
 
+    def clone_model(self, name: str) -> dict:
+        with self.lock:
+            source_model = next((m for m in self.models if m["name"] == name), None)
+            if not source_model:
+                raise ValueError("Модель не найдена")
+            clone = dict(source_model)
+            clone["name"] = self._make_copy_name(name)
+            self.models.append(clone)
+            self._save()
+            return clone
+
     def remove_model(self, name: str):
         with self.lock:
             self.models = [m for m in self.models if m["name"] != name]
@@ -131,6 +145,18 @@ class ModelManager:
         norm.update(model)
         return norm
 
+    def _make_copy_name(self, source_name: str) -> str:
+        existing_names = {m["name"] for m in self.models}
+        base_name = f"{source_name} копия"
+        if base_name not in existing_names:
+            return base_name
+        index = 2
+        while True:
+            candidate = f"{base_name} {index}"
+            if candidate not in existing_names:
+                return candidate
+            index += 1
+
     def _write_claude_settings(self, model: dict) -> Path:
         CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {}
@@ -163,6 +189,7 @@ class ModelDialog:
         self.window.title(title)
         self.window.grab_set()
         self.result = None
+        self._loading_models = False
 
         frm = ttk.Frame(self.window, padding=12)
         frm.pack(fill=tk.BOTH, expand=True)
@@ -200,6 +227,8 @@ class ModelDialog:
         self.opus_var = tk.StringVar(
             value=initial.get("ANTHROPIC_DEFAULT_OPUS_MODEL") if initial else DEFAULT_ENV["ANTHROPIC_DEFAULT_OPUS_MODEL"]
         )
+        self.models_status_var = tk.StringVar(value="")
+        self.available_model_ids: list[str] = []
 
         ttk.Entry(frm, textvariable=self.name_var, width=38).grid(row=0, column=1, sticky=tk.EW, pady=4)
         endpoint_entry = ttk.Entry(frm, textvariable=self.endpoint_var, width=38)
@@ -212,12 +241,14 @@ class ModelDialog:
         telemetry_entry.grid(row=4, column=1, sticky=tk.EW, pady=4)
         traffic_entry = ttk.Entry(frm, textvariable=self.traffic_var, width=38)
         traffic_entry.grid(row=5, column=1, sticky=tk.EW, pady=4)
-        haiku_entry = ttk.Entry(frm, textvariable=self.haiku_var, width=38)
+        haiku_entry = ttk.Combobox(frm, textvariable=self.haiku_var, width=35)
         haiku_entry.grid(row=6, column=1, sticky=tk.EW, pady=4)
-        sonnet_entry = ttk.Entry(frm, textvariable=self.sonnet_var, width=38)
+        sonnet_entry = ttk.Combobox(frm, textvariable=self.sonnet_var, width=35)
         sonnet_entry.grid(row=7, column=1, sticky=tk.EW, pady=4)
-        opus_entry = ttk.Entry(frm, textvariable=self.opus_var, width=38)
+        opus_entry = ttk.Combobox(frm, textvariable=self.opus_var, width=35)
         opus_entry.grid(row=8, column=1, sticky=tk.EW, pady=4)
+        self._model_comboboxes = [haiku_entry, sonnet_entry, opus_entry]
+        self._seed_model_combobox_values()
 
         self._entries = [
             self.window.nametowidget(frm.grid_slaves(row=0, column=1)[0]),
@@ -234,12 +265,104 @@ class ModelDialog:
 
         btns = ttk.Frame(frm)
         btns.grid(row=9, column=0, columnspan=2, sticky=tk.E, pady=(10, 0))
+        self.models_btn = ttk.Button(btns, text="Проверить и загрузить модели", command=self._on_load_models)
+        self.models_btn.pack(side=tk.LEFT)
+        ttk.Label(btns, textvariable=self.models_status_var).pack(side=tk.LEFT, padx=(8, 0))
         ttk.Button(btns, text="Отмена", command=self.window.destroy).pack(side=tk.RIGHT, padx=(8, 0))
         ttk.Button(btns, text="Сохранить", command=self._on_save).pack(side=tk.RIGHT)
 
         frm.columnconfigure(1, weight=1)
         self.window.bind("<Return>", lambda _: self._on_save())
         self.window.bind("<Escape>", lambda _: self.window.destroy())
+
+    def _seed_model_combobox_values(self):
+        unique_values = []
+        for value in (
+            self.haiku_var.get().strip(),
+            self.sonnet_var.get().strip(),
+            self.opus_var.get().strip(),
+        ):
+            if value and value not in unique_values:
+                unique_values.append(value)
+        self.available_model_ids = unique_values
+        self._update_model_combobox_values()
+
+    def _update_model_combobox_values(self):
+        values = tuple(self.available_model_ids)
+        for combo in self._model_comboboxes:
+            combo["values"] = values
+
+    def _build_models_url(self, endpoint: str) -> str:
+        parsed = urllib_parse.urlparse(endpoint)
+        if not parsed.scheme or not parsed.netloc:
+            raise ValueError("Endpoint должен быть корректным URL, например https://api.anthropic.com")
+
+        base = endpoint.rstrip("/")
+        if base.endswith("/v1"):
+            return f"{base}/models"
+        return f"{base}/v1/models"
+
+    def _fetch_models(self, endpoint: str, api_key: str) -> list[str]:
+        url = self._build_models_url(endpoint)
+        headers = {"anthropic-version": "2023-06-01"}
+        if api_key:
+            headers["x-api-key"] = api_key
+        req = urllib_request.Request(url=url, headers=headers, method="GET")
+        with urllib_request.urlopen(req, timeout=12) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        rows = payload.get("data", payload) if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            raise ValueError("Некорректный формат ответа /v1/models")
+        model_ids = [row.get("id") for row in rows if isinstance(row, dict) and row.get("id")]
+        if not model_ids:
+            raise ValueError("Список моделей пуст или недоступен для этого ключа")
+        return model_ids
+
+    def _on_load_models(self):
+        if self._loading_models:
+            return
+        endpoint = self.endpoint_var.get().strip()
+        api_key = self.key_var.get().strip()
+        if not endpoint:
+            messagebox.showerror("Проверка моделей", "Сначала укажите endpoint")
+            return
+
+        self._loading_models = True
+        self.models_btn.config(state=tk.DISABLED)
+        self.models_status_var.set("Проверяю...")
+
+        def worker():
+            try:
+                model_ids = self._fetch_models(endpoint, api_key)
+                self.window.after(0, lambda: self._on_models_loaded(model_ids))
+            except urllib_error.HTTPError as exc:
+                self.window.after(0, lambda: self._on_models_load_error(f"HTTP {exc.code}: {exc.reason}"))
+            except urllib_error.URLError as exc:
+                self.window.after(0, lambda: self._on_models_load_error(f"Сеть: {exc.reason}"))
+            except Exception as exc:
+                self.window.after(0, lambda: self._on_models_load_error(str(exc)))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_models_loaded(self, model_ids: list[str]):
+        self._loading_models = False
+        self.models_btn.config(state=tk.NORMAL)
+        self.available_model_ids = model_ids
+        self._update_model_combobox_values()
+
+        for model_var in (self.haiku_var, self.sonnet_var, self.opus_var):
+            current = model_var.get().strip()
+            if not current or current not in model_ids:
+                model_var.set(model_ids[0])
+
+        self.models_status_var.set(f"Найдено: {len(model_ids)}")
+
+    def _on_models_load_error(self, error_text: str):
+        self._loading_models = False
+        self.models_btn.config(state=tk.NORMAL)
+        self.models_status_var.set("Ошибка проверки")
+        messagebox.showerror("Проверка моделей", f"Не удалось получить список моделей: {error_text}")
 
     def _on_save(self):
         name = self.name_var.get().strip()
@@ -334,42 +457,66 @@ class App:
         self.root = root
         self.manager = manager
         self.tray_icon = None
+        self._quit_requested = False
         self._setup_ui()
         self._start_tray()
+        self._start_quit_checker()
 
     def _setup_ui(self):
         self.root.title("Переключатель моделей")
-        self.root.geometry("560x420")
+        self.root.geometry("760x460")
+        self.root.minsize(620, 360)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
         style = ttk.Style()
         style.configure("TButton", padding=6)
         style.configure("TLabel", padding=4)
 
-        frm = ttk.Frame(self.root, padding=12)
-        frm.pack(fill=tk.BOTH, expand=True)
+        container = ttk.Frame(self.root, padding=12)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(1, weight=1)
+        container.rowconfigure(0, weight=1)
 
-        header = ttk.Label(frm, text="Модели", font=("SF Pro Display", 12, "bold"))
-        header.pack(anchor=tk.W, pady=(0, 6))
+        left = ttk.Frame(container, width=190)
+        left.grid(row=0, column=0, sticky=tk.NS, padx=(0, 12))
+        left.grid_propagate(False)
+        ttk.Label(left, text="Действия", font=("SF Pro Display", 12, "bold")).pack(anchor=tk.W, pady=(0, 10))
+
+        ttk.Button(left, text="Добавить", command=self._on_add_model).pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(left, text="Редактировать", command=self._on_edit_model).pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(left, text="Клонировать", command=self._on_clone_model).pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(left, text="Сделать активной", command=self._on_make_active).pack(fill=tk.X, pady=(0, 6))
+        ttk.Button(left, text="Удалить", command=self._on_delete).pack(fill=tk.X, pady=(0, 6))
+        ttk.Separator(left, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(4, 8))
+        ttk.Button(left, text="Экспорт в Claude Code", command=self._export_to_claude).pack(fill=tk.X)
+
+        right = ttk.Frame(container)
+        right.grid(row=0, column=1, sticky=tk.NSEW)
+        right.columnconfigure(0, weight=1)
+        right.rowconfigure(1, weight=1)
+
+        header = ttk.Label(right, text="Модели", font=("SF Pro Display", 12, "bold"))
+        header.grid(row=0, column=0, sticky=tk.W, pady=(0, 6))
 
         columns = ("active", "name", "endpoint")
-        self.tree = ttk.Treeview(frm, columns=columns, show="headings", height=10)
+        self.tree = ttk.Treeview(right, columns=columns, show="headings", height=10)
         self.tree.heading("active", text="")
         self.tree.heading("name", text="Модель")
         self.tree.heading("endpoint", text="Endpoint / базовый URL")
         self.tree.column("active", width=40, anchor=tk.CENTER)
         self.tree.column("name", width=150)
         self.tree.column("endpoint", width=320)
-        self.tree.pack(fill=tk.BOTH, expand=True)
+        self.tree.grid(row=1, column=0, sticky=tk.NSEW)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
+        self.tree.bind("<Button-2>", self._on_tree_right_click)
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+        self.tree.bind("<Control-Button-1>", self._on_tree_right_click)
 
-        btns = ttk.Frame(frm)
-        btns.pack(fill=tk.X, pady=(8, 0))
-        ttk.Button(btns, text="Добавить", command=self._on_add_model).pack(side=tk.LEFT)
-        ttk.Button(btns, text="Редактировать", command=self._on_edit_model).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(btns, text="Сделать активной", command=self._on_make_active).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(btns, text="Удалить", command=self._on_delete).pack(side=tk.LEFT, padx=(6, 0))
-        ttk.Button(btns, text="Экспорт в Claude Code", command=self._export_to_claude).pack(side=tk.RIGHT)
+        self._actions_menu = tk.Menu(self.root, tearoff=0)
+        self._actions_menu.add_command(label="Клонировать", command=self._on_clone_model)
+        self._actions_menu.add_command(label="Сделать активной", command=self._on_make_active)
+        self._actions_menu.add_separator()
+        self._actions_menu.add_command(label="Удалить", command=self._on_delete)
 
         self._refresh_tree()
 
@@ -500,6 +647,32 @@ class App:
         self.tree.selection_set(row_id)
         self._on_edit_model()
 
+    def _on_tree_right_click(self, event):
+        row_id = self.tree.identify_row(event.y)
+        if row_id:
+            self.tree.selection_set(row_id)
+        try:
+            self._actions_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._actions_menu.grab_release()
+        return "break"
+
+    def _on_clone_model(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("Выбор", "Выберите модель")
+            return
+        values = self.tree.item(selected[0], "values")
+        name = values[1] if len(values) > 1 else values[0]
+        try:
+            clone = self.manager.clone_model(name)
+        except ValueError as exc:
+            messagebox.showerror("Ошибка", str(exc))
+            return
+        self._refresh_tree()
+        self._refresh_tray_menu()
+        messagebox.showinfo("Клонирование", f"Создана модель: {clone['name']}")
+
     def _on_make_active(self):
         selected = self.tree.selection()
         if not selected:
@@ -535,10 +708,20 @@ class App:
     def _on_close(self):
         self.root.withdraw()
 
+    def _start_quit_checker(self):
+        """Периодически проверяет флаг выхода в main thread."""
+        if self._quit_requested:
+            # Tray icon работает в daemon thread, завершится автоматически при выходе процесса.
+            # Не вызываем tray_icon.stop() - на macOS это вызывает краш при попытке
+            # удалить NSStatusItem из main thread (Must only be used from the main thread).
+            self.root.quit()
+            return
+        # Проверяем каждые 100ms
+        self.root.after(100, self._start_quit_checker)
+
     def _quit_all(self):
-        if self.tray_icon:
-            self.tray_icon.stop()
-        self.root.quit()
+        """Запрашивает выход из tray callback (может быть не в main thread)."""
+        self._quit_requested = True
 
 
 if __name__ == "__main__":

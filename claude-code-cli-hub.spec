@@ -1,6 +1,29 @@
 # -*- mode: python ; coding: utf-8 -*-
+import sys
+import os
 
 block_cipher = None
+
+# Загружаем версию
+version = "1.0.3"  # Обновляется автоматически bump-my-version
+
+# Определяем путь к иконке в зависимости от платформы
+# Для macOS используем PNG — PyInstaller сконвертирует при необходимости
+if sys.platform == 'darwin':
+    icon_path = 'assets/icon.png'
+elif sys.platform == 'win32':
+    icon_path = 'assets/icon.ico'
+else:
+    icon_path = 'assets/icon.png'
+
+# Проверяем существование файла иконки
+if not os.path.exists(icon_path):
+    print(f"Warning: Icon not found at {icon_path}")
+    icon_path = None
+
+# Для macOS используем onedir mode (noarchive=True) для корректной работы .app bundle
+# Для других платформ используем onefile mode (noarchive=False)
+is_macos = sys.platform == 'darwin'
 
 a = Analysis(
     ['main.py'],
@@ -15,7 +38,7 @@ a = Analysis(
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
-    noarchive=False,
+    noarchive=is_macos,  # True для macOS (onedir), False для других (onefile)
 )
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
@@ -40,4 +63,19 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon=icon_path,
 )
+
+# Для macOS создаем .app bundle с иконкой
+if is_macos:
+    app = BUNDLE(
+        exe,
+        name='claude-code-cli-hub.app',
+        icon=icon_path,
+        bundle_identifier='com.vladimirnosov.claude-code-cli-hub',
+        info_plist={
+            'CFBundleShortVersionString': version,
+            'CFBundleVersion': version,
+            'NSHighResolutionCapable': 'True',
+        },
+    )
