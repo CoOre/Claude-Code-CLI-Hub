@@ -180,7 +180,7 @@ jobs:
       with:
         tag_name: ${{ needs.bump-version.outputs.version }}
         name: Release ${{ needs.bump-version.outputs.version }}
-        files: artifacts/**/*.tar.gz,artifacts/**/*.zip
+        files: artifacts/**/*.tar.gz,artifacts/**/*.zip,artifacts/**/*.dmg
         draft: false
         prerelease: false
         generate_release_notes: true
