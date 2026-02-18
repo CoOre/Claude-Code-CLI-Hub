@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import threading
 from pathlib import Path
@@ -467,6 +468,7 @@ class App:
     def __init__(self, root: tk.Tk, manager: ModelManager):
         self.root = root
         self.manager = manager
+        self._main_thread = threading.current_thread()
         self.tray_icon = None
         self._tk_icon = None
         self._pystray = None
@@ -477,6 +479,12 @@ class App:
         # Delay tray startup to let Tk render the window first.
         self.root.after(0, self._start_tray)
         self._start_quit_checker()
+
+    def _run_on_tk_thread(self, func, *args, **kwargs):
+        if threading.current_thread() is self._main_thread:
+            func(*args, **kwargs)
+            return
+        self.root.after(0, lambda: func(*args, **kwargs))
 
     def _setup_ui(self):
         self.root.title("Переключатель моделей")
@@ -543,6 +551,10 @@ class App:
         return dialog.result
 
     def _start_tray(self):
+        # Allow explicit tray disable on macOS when debugging UI/event-loop issues.
+        if sys.platform == "darwin" and os.getenv("CCC_DISABLE_TRAY_ON_MAC") == "1":
+            return
+
         try:
             import pystray
             from PIL import Image, ImageDraw
@@ -557,6 +569,13 @@ class App:
         icon_image = self._generate_icon()
         menu = self._build_menu()
         self.tray_icon = pystray.Icon("model_switcher", icon_image, "Переключатель моделей", menu)
+        if sys.platform == "darwin":
+            try:
+                self.tray_icon.run_detached()
+            except Exception:
+                self.tray_icon = None
+            return
+
         thread = threading.Thread(target=self.tray_icon.run, daemon=True)
         thread.start()
 
@@ -617,8 +636,8 @@ class App:
                 checked=make_checked(name)
             ))
         items.append(pystray.Menu.SEPARATOR)
-        items.append(pystray.MenuItem("Открыть окно", lambda _: self._bring_to_front()))
-        items.append(pystray.MenuItem("Выйти", lambda _: self._quit_all()))
+        items.append(pystray.MenuItem("Открыть окно", lambda icon, item: self._bring_to_front()))
+        items.append(pystray.MenuItem("Выйти", lambda icon, item: self._quit_all()))
         return pystray.Menu(*items)
 
     def _refresh_tray_menu(self):
@@ -649,18 +668,24 @@ class App:
         messagebox.showinfo("Экспорт завершен", f"Настройки записаны в {target}. Перезапусти `claude` чтобы применить.")
 
     def _set_active_from_tray(self, name: str):
-        try:
-            self.manager.set_active(name)
-            self._refresh_tree()
-            self._refresh_tray_menu()
-        except ValueError as exc:
-            messagebox.showerror("Ошибка", str(exc))
+        def apply_selection():
+            try:
+                self.manager.set_active(name)
+                self._refresh_tree()
+                self._refresh_tray_menu()
+            except ValueError as exc:
+                messagebox.showerror("Ошибка", str(exc))
+
+        self._run_on_tk_thread(apply_selection)
 
     def _bring_to_front(self):
-        self.root.deiconify()
-        self.root.lift()
-        self.root.attributes('-topmost', True)
-        self.root.after_idle(lambda: self.root.attributes('-topmost', False))
+        def bring():
+            self.root.deiconify()
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.after_idle(lambda: self.root.attributes('-topmost', False))
+
+        self._run_on_tk_thread(bring)
 
     def _on_add_model(self):
         result = self._open_model_dialog("Добавить модель")
