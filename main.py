@@ -16,6 +16,7 @@ DEFAULT_ENV = {
     "CLAUDE_CODE_ENABLE_TELEMETRY": "0",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "HTTP_PROXY": "",
+    "ANTHROPIC_API_KEY": "",
     "ANTHROPIC_AUTH_TOKEN": "",
     "ANTHROPIC_BASE_URL": "",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL": "glm-4.5-air",
@@ -36,6 +37,24 @@ DEFAULT_MODELS = [
         **{**DEFAULT_ENV, "ANTHROPIC_BASE_URL": "http://localhost:11434/v1"},
     },
 ]
+
+
+def _read_claude_env() -> dict:
+    if not CLAUDE_SETTINGS_PATH.exists():
+        return {}
+    try:
+        data = json.loads(CLAUDE_SETTINGS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    env = data.get("env", {})
+    return env if isinstance(env, dict) else {}
+
+
+def _has_claude_auth_token() -> bool:
+    env = _read_claude_env()
+    auth_token = env.get("ANTHROPIC_AUTH_TOKEN", "")
+    api_key = env.get("ANTHROPIC_API_KEY", "")
+    return bool(str(auth_token).strip() or str(api_key).strip())
 
 
 def _resource_root() -> Path:
@@ -129,6 +148,20 @@ class ModelManager:
             self._save()
         self._write_claude_settings(model)
 
+    def activate_browserless(self, name: str) -> Path:
+        with self.lock:
+            model = next((m for m in self.models if m["name"] == name), None)
+            if not model:
+                raise ValueError("Модель не найдена")
+            if not str(model.get("api_key", "")).strip():
+                raise ValueError(
+                    "Для режима без браузера нужен API ключ. "
+                    "Добавь ключ в модель и попробуй снова."
+                )
+            self.active = name
+            self._save()
+        return self._write_claude_settings(model, force_console_login=True, force_api_key_auth=True)
+
     def is_active(self, name: str) -> bool:
         with self.lock:
             return self.active == name
@@ -169,7 +202,13 @@ class ModelManager:
                 return candidate
             index += 1
 
-    def _write_claude_settings(self, model: dict) -> Path:
+    def _write_claude_settings(
+        self,
+        model: dict,
+        *,
+        force_console_login: bool = False,
+        force_api_key_auth: bool = False,
+    ) -> Path:
         CLAUDE_SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
         data = {}
         if CLAUDE_SETTINGS_PATH.exists():
@@ -178,12 +217,24 @@ class ModelManager:
             except Exception:
                 data = {}
         env = data.get("env", {})
+        model_api_key = str(model.get("api_key", "")).strip()
+        existing_auth_token = str(env.get("ANTHROPIC_AUTH_TOKEN", "")).strip()
+        existing_api_key = str(env.get("ANTHROPIC_API_KEY", "")).strip()
+        # Если у модели пустой ключ, сохраняем текущий токен, чтобы не ломать уже
+        # пройденную OAuth-авторизацию в Claude Code.
+        auth_token = model_api_key or existing_auth_token
+        if force_api_key_auth:
+            auth_token = model_api_key
+        api_key = model_api_key or existing_api_key
+        if force_api_key_auth:
+            api_key = model_api_key
         env.update(
             {
                 "CLAUDE_CODE_ENABLE_TELEMETRY": model.get("CLAUDE_CODE_ENABLE_TELEMETRY", ""),
                 "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": model.get("CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC", ""),
                 "HTTP_PROXY": model.get("HTTP_PROXY", ""),
-                "ANTHROPIC_AUTH_TOKEN": model.get("api_key", ""),
+                "ANTHROPIC_API_KEY": api_key,
+                "ANTHROPIC_AUTH_TOKEN": auth_token,
                 "ANTHROPIC_BASE_URL": model.get("endpoint", ""),
                 "ANTHROPIC_DEFAULT_HAIKU_MODEL": model.get("ANTHROPIC_DEFAULT_HAIKU_MODEL", ""),
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": model.get("ANTHROPIC_DEFAULT_SONNET_MODEL", ""),
@@ -191,6 +242,8 @@ class ModelManager:
             }
         )
         data["env"] = env
+        if force_console_login:
+            data["forceLoginMethod"] = "console"
         CLAUDE_SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
         return CLAUDE_SETTINGS_PATH
 
@@ -514,6 +567,7 @@ class App:
         ttk.Button(left, text="Удалить", command=self._on_delete).pack(fill=tk.X, pady=(0, 6))
         ttk.Separator(left, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=(4, 8))
         ttk.Button(left, text="Экспорт в Claude Code", command=self._export_to_claude).pack(fill=tk.X)
+        ttk.Button(left, text="Без браузера (API key)", command=self._activate_browserless).pack(fill=tk.X, pady=(6, 0))
 
         right = ttk.Frame(container)
         right.grid(row=0, column=1, sticky=tk.NSEW)
@@ -665,7 +719,19 @@ class App:
         except Exception as exc:
             messagebox.showerror("Экспорт", f"Не удалось записать настройки: {exc}")
             return
-        messagebox.showinfo("Экспорт завершен", f"Настройки записаны в {target}. Перезапусти `claude` чтобы применить.")
+        if _has_claude_auth_token():
+            messagebox.showinfo("Экспорт завершен", f"Настройки записаны в {target}. Перезапусти `claude` чтобы применить.")
+            return
+
+        messagebox.showwarning(
+            "Требуется авторизация Claude Code",
+            (
+                f"Настройки записаны в {target}, но токен авторизации не найден.\n\n"
+                "Сделай один из шагов:\n"
+                "1) Запусти `claude` в терминале и пройди вход через браузер.\n"
+                "2) Либо добавь API-ключ в модель и снова экспортируй настройки."
+            ),
+        )
 
     def _set_active_from_tray(self, name: str):
         def apply_selection():
@@ -677,6 +743,34 @@ class App:
                 messagebox.showerror("Ошибка", str(exc))
 
         self._run_on_tk_thread(apply_selection)
+
+    def _activate_browserless(self):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showinfo("Режим без браузера", "Выберите модель")
+            return
+
+        values = self.tree.item(selected[0], "values")
+        name = values[1] if len(values) > 1 else values[0]
+        try:
+            target = self.manager.activate_browserless(name)
+        except ValueError as exc:
+            messagebox.showerror("Режим без браузера", str(exc))
+            return
+        except Exception as exc:
+            messagebox.showerror("Режим без браузера", f"Не удалось подготовить настройки: {exc}")
+            return
+
+        self._refresh_tree()
+        self._refresh_tray_menu()
+        messagebox.showinfo(
+            "Режим без браузера включен",
+            (
+                f"Готово. Настройки записаны в {target}.\n\n"
+                "Теперь запускай `claude` в новом терминале: вход через браузер не требуется, "
+                "будет использован API-ключ выбранной модели."
+            ),
+        )
 
     def _bring_to_front(self):
         def bring():
